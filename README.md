@@ -77,7 +77,7 @@ To get the values for the clientId and clientSecret, follow these steps:
 5. In the table, click on Actions and select View Credentials from the dropdown.
 6. Copy the values from the Client ID and Client Secret fields into your `config.yaml` file.
 
-## Example Ansible Playbooks for provisioning and installing a Custom OS (Rocky Linux) using RAM OS
+## Ansible Playbooks for provisioning and installing a Custom OS (Rocky Linux) using RAM OS
 
 The Ansible Playbook allows you to provision and install a custom OS on a Bare Metal Cloud server.
 * **_inventory.yaml_** contains all the information about the BMC server. Custom values in this file allows custom OS setup.
