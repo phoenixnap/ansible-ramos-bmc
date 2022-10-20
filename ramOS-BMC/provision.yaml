@@ -1,7 +1,7 @@
 ---
 # code: language=ansible
 # vim:syntax=yaml
-## This playbook deploys server on BMC using ramOS method
+## This playbook deploys server on BMC using the ramOS method
 
 - name: Provision BMC servers
   hosts: servers
