@@ -7,7 +7,7 @@
 </h1>
 
 <p align="center">
-Ansible playbooks for provisioning a Custom OS server (RAM OS) and installing a custom OS on the BMC server.  Choose whether to set up RAID 0 or 1, the root disk size, LVM, and the OS.
+Ansible playbooks for provisioning a Custom OS server (RAM OS) and installing a customized OS on the BMC server. Choose whether to set up RAID 0 or 1, the root disk size, LVM, and the OS.
 </p>
 
 <p align="center">
