@@ -1,0 +1,330 @@
+---
+# code: language=ansible
+# vim:syntax=yaml
+## This playbook deploys server on BMC using ramOS method
+
+- name: Provision BMC servers
+  hosts: servers
+  strategy: linear
+  gather_facts: false
+  vars_files:
+    - ~/.pnap/config.yaml
+  collections:
+  - phoenixnap.bmc
+  tags:
+    - provision
+  tasks:
+  - name: Provisioning server
+    delegate_to: localhost
+    register: result
+    phoenixnap.bmc.server:
+      client_id: "{{clientId}}"
+      client_secret: "{{clientSecret}}"
+      hostnames: "{{ inventory_hostname }}"
+      location: "{{ hostvars[inventory_hostname].location }}"
+      os: "{{ hostvars[inventory_hostname].os }}"
+      type: "{{ hostvars[inventory_hostname].type }}"
+      description: "{{ hostvars[inventory_hostname].description }}"
+      install_default_sshkeys: "{{ hostvars[inventory_hostname].install_default_ssh_keys }}"
+      ssh_key: "{{ hostvars[inventory_hostname].ssh_key }}"
+      ssh_key_ids: "{{ hostvars[inventory_hostname].ssh_key_ids }}"
+      reservation_id: "{{ hostvars[inventory_hostname].reservation_id }}"
+      pricing_model: "{{ hostvars[inventory_hostname].pricing_model }}"
+      network_type: "{{ hostvars[inventory_hostname].network_type }}"
+      install_os_to_ram: true
+      state: present
+    retries: 3
+    delay: 3
+    until: (not result.failed) and (result.servers is defined)
+
+  - name: Print out relevant response
+    debug:
+      var: result
+    tags: 
+      - debug
+
+  - name: Set ansible_host to public IP address
+    set_fact:
+      ansible_host: "{{ result.servers.0.publicIpAddresses.0 }}"
+
+- name: Perform work on provisioned BMC servers
+  hosts: servers
+  gather_facts: false
+  become: true
+  vars:
+    ansible_user: ubuntu
+    ansible_connection: ssh
+    host_key_checking: false
+    accelerate: true
+    os_url: "{{ hostvars[inventory_hostname].os_url }}" 
+    os_user: "{{ hostvars[inventory_hostname].os_user }}"
+    os_raid: "{{ hostvars[inventory_hostname].os_raid }}"
+    os_lvm: "{{ hostvars[inventory_hostname].os_lvm }}"
+    os_root_size: "{{ hostvars[inventory_hostname].os_root_size }}"
+
+  tasks:
+  - name: Wait for SSH connection
+    wait_for_connection:
+      sleep: 1
+      connect_timeout: 5
+      timeout: 60
+
+  - name: Add curtin ppa
+    apt_repository:
+      validate_certs: yes
+      repo: 'ppa:curtin-dev/stable'
+      state: present
+      update_cache: yes
+    register: result
+    retries: 3
+    until: result is not failed
+
+  - name: Install curtin tool
+    apt:
+      pkg: [curtin]
+      state: present
+    no_log: true
+    register: result
+    retries: 3
+    until: result is not failed
+
+  - name: Capture block devices on server
+    command: "lsblk  --tree -J -o KNAME,PATH,RO,SIZE,TYPE -x KNAME"
+    register: res_block_devices
+    no_log: true
+
+  - name: Filter block devices (non-readonly disks)
+    set_fact:
+      block_devices: "{{ (res_block_devices.stdout | from_json).blockdevices | rejectattr('ro','equalto','true') | selectattr('type', 'equalto', 'disk') }}"
+
+  - name: Ensure there are enough block devices if RAID was requested
+    fail:
+      msg: "Not enough drives for raid{{ os_raid }} - {{ block_devices | length }} drives detected"
+    when: (os_raid is defined) and ((os_raid=="0") or (os_raid=="1")) and ((block_devices | length) < 2)
+
+  - name: Ensure target is empty
+    shell: |
+      umount -d -f -l -R -v /mnt/target
+      rm -rf /mnt/target || true
+
+  - name: Use curtin tool to cleanup holders of block devices
+    command: "curtin clear-holders {{ block_devices | map(attribute='path') | join(' ') }}"
+
+  - name: Block-wipe
+    command: "curtin block-wipe {{ block_devices | map(attribute='path') | join(' ') }}"
+
+  - name: Gather ansible facts
+    gather_facts:
+            
+  - name: Get authorized_keys
+    command: "cat /home/ubuntu/.ssh/authorized_keys"
+    register: ssh_authorized_keys
+    no_log: true
+
+  - name: Get Network Configuration
+    command: "cat /etc/cloud/cloud.cfg.d/50-curtin-networking.cfg"
+    register: network_configuration
+    no_log: true
+
+  - name: Detect boot mode
+    shell: |
+      [ -d /sys/firmware/efi ] &&  echo UEFI || echo Legacy
+    register: os_boot_mode
+
+  - name: Prepare curtin storage template
+    set_fact:
+      curtin_storage: |
+        storage:
+          version: 1
+          config:
+        {% for disk in block_devices %}
+          - id: disk{{loop.index0}}
+            type: disk
+            ptable: gpt
+            path: {{ disk.path }}
+            name: disk{{loop.index0}}
+            wipe: superblock-recursive
+            grub_device: true
+
+          - id: disk{{loop.index0}}_bios_grub
+            type: partition
+            size: 1MB
+            device: disk{{loop.index0}}
+            flag: bios_grub
+
+        {% if os_boot_mode.stdout=="UEFI" %}
+          - id: disk{{loop.index0}}_esp
+            type: partition
+            size: 256M
+            offset: 2M
+            device: disk{{loop.index0}}
+            flag: boot
+            name: ESP
+
+          - id: efi_format{{loop.index0}}_esp
+            type: format
+            fstype: fat32
+            label: ESP
+            volume: disk{{loop.index0}}_esp
+        {% endif %}
+
+          - id: disk{{loop.index0}}_root
+            type: partition
+            size: {{ os_root_size }}
+            device: disk{{loop.index0}}
+            name: disk{{loop.index0}}_root
+
+        {% endfor %}
+        {% if (os_raid=="1") or (os_raid=="0") %}
+          # raid{{ os_raid }} device
+          - id: mddevice
+            name: md0
+            type: raid
+            raidlevel: {{ os_raid }}
+            devices:
+            {% for disk in block_devices %}- disk{{loop.index0}}_root
+            {% endfor %}
+        {% else %}
+          # no raid
+        {% endif %}   
+        {% if os_lvm %}
+          #lvm
+          - id: vgroot
+            type: lvm_volgroup
+            name: vgroot
+            devices: [{% if (os_raid=="1") or (os_raid=="0") %}mddevice{% else %}disk0_root{% endif %}]
+          - id: lvroot
+            type: lvm_partition
+            name: lvroot
+            volgroup: vgroot
+            #size: {{ os_root_size }}
+          - id: lvfs
+            type: format
+            fstype: ext4
+            volume: lvroot
+          - id: lvmount
+            type: mount
+            path: /
+            device: lvfs
+        {% else %}
+          # no lvm
+        {% if (os_raid=="1") or (os_raid=="0") %}
+          # raid{{ os_raid }}
+          - id: md_root
+            type: format
+            fstype: ext4
+            volume: mddevice
+          - id: md_mount_root
+            type: mount
+            path: /
+            device: md_root
+        {% else %}
+          # no raid
+          - id: disk_root
+            type: format
+            fstype: ext4
+            volume: disk0_root
+          - id: disk_mount_root
+            type: mount
+            path: /
+            device: disk_root
+        {% endif %}
+        {% endif %}
+        {% if os_boot_mode.stdout=="UEFI" %}
+          - id: mount_efi
+            type: mount
+            path: /boot/efi
+            device: efi_format0_esp
+        {% endif %}
+
+  - name: Write curtin template for installation
+    copy:
+      dest: /root/curtin.yaml
+      content: |
+        #vim:syntax=yaml
+        showtrace: true
+        verbosity: 3
+
+        pollinate:
+          user_agent: false
+
+        install:
+          log_file: /tmp/install.log
+          save_install_config: /root/curtin_conf.yaml
+          target: /mnt/target
+          unmount: enabled
+
+          block-meta:
+            devices: [{{ block_devices | map(attribute='kname') | join(',') }}]
+
+        {{ curtin_storage }}
+
+        grub:
+          install_devices: [{{ block_devices | map(attribute='path') | join(',') }}]
+          update_nvram: True
+          remove_duplicate_entries: True
+          reorder_uefi: True
+          reorder_uefi_force_fallback: True
+
+        sources: ["{{ os_image_url }}"]
+
+        write_files:
+          000-configure-cloud-init-identify:
+            path: /etc/cloud/ds-identify.cfg
+            content: |
+              datasource: NoCloud, None
+              policy: enabled
+
+          001-cloud-config:
+            path: /etc/cloud/cloud.cfg.d/90-cloud-config.cfg
+            content: |
+              #cloud-config
+              warnings:
+               dsid_missing_source: off
+
+              manage_etc_hosts: true
+              preserve_hostname: false
+              hostname: {{ inventory_hostname }}
+              fqdn: {{ inventory_hostname }}
+
+              users:
+              - name: {{ os_user }}
+                shell: /bin/bash
+                sudo: ['ALL=(ALL) NOPASSWD:ALL']
+                ssh-authorized-keys:
+                {% for line in ssh_authorized_keys.stdout_lines %}- {{ line }}
+                {% endfor %}
+
+          002-cloud-config-datasource:
+            path: /etc/cloud/cloud.cfg.d/95-cloudconfig-datasource.cfg
+            content: "datasource_list: [ NoCloud, None ]"
+
+        late_commands:
+          06-update-repos-for-centos8: [curtin, in-target, --, "sh", "-c", "cat /etc/redhat-release |grep 'CentOS Linux release 8' && sed -i 's/#baseurl=http:\\/\\/mirror.centos.org/baseurl=http:\\/\\/vault.centos.org/g' /etc/yum.repos.d/CentOS-Linux-*.repo || true"]
+
+        multipath:
+          mode: auto
+          overwrite_bindings: True
+        {{ network_configuration.stdout }}
+
+  - name: Install
+    command: "curtin -v --config /root/curtin.yaml --install-deps install"
+
+  - name: Reboot
+    command: "reboot"
+    async: 300
+    poll: 0
+
+  - name: "Switch to {{ os_user }} user"
+    set_fact: 
+      ansible_user: "{{ os_user }}"
+  
+  - name: Wait for SSH connection after reboot
+    wait_for_connection:
+      delay: 60
+      sleep: 1
+      connect_timeout: 5
+      timeout: 600
+
+  - name: Report from deployed OS
+    shell: "hostname; uname -a; ip a"

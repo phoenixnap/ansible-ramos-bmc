@@ -1,0 +1,18 @@
+servers:
+  hosts:
+    ramOSrocky9:
+      description: "rocky 9 with raid0 and lvm 50G root"
+      os: ubuntu/focal
+      type: s2.c1.medium
+      location: PHX
+      ssh_key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+      install_default_ssh_keys: true
+      ssh_key_ids: []
+      reservation_id: Null
+      pricing_model: "HOURLY"
+      network_type: "PUBLIC_AND_PRIVATE"
+      os_user: "rocky"
+      os_root_size: "50G"
+      os_lvm: true
+      os_raid: 0
+      os_image_url: "https://bmc-images.oseast-us-1.phoenixnap.com/ramOS/rocky9.tar.gz"
