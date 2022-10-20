@@ -80,10 +80,18 @@ To get the values for the clientId and clientSecret, follow these steps:
 ## Example Ansible Playbooks for provisioning and installing a Custom OS (Rocky Linux) using RAM OS
 
 The Ansible Playbook allows you to provision and install a custom OS on a Bare Metal Cloud server.
+* **_inventory.yaml_** contains all the information about the BMC server. Custom values in this file allows custom OS setup.
+* **_provision.yaml_** deploys the BMC server using the RAM OS feature. The playbook uses the information from **_inventory.yaml_** to deploy and set up custom OS on the server.
 
 This example shows you how to deploy and install:
 * An **s2.c1.medium** server in **Phoenix** at an **hourly rate**.
 * **Rocky OS** with a **50G root volume**, **LVM**, and **RAID level 0**.
+
+To run the example, use:
+
+    
+    ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook provision.yaml -i inventory.yaml
+    
 
 For the full guide, check out this helpful tutorial: [How to Install Custom OS (Rocky Linux) On BMC](https://phoenixnap.com/kb/bmc-custom-os)
 
