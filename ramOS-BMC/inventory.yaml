@@ -2,7 +2,7 @@ servers:
   hosts:
     ramOSrocky9:
       description: "rocky 9 with raid0 and lvm 50G root"
-      os: ubuntu/focal
+      os: ubuntu/jammy
       type: s2.c1.medium
       location: PHX
       ssh_key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
