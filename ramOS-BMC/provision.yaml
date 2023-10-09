@@ -302,7 +302,17 @@
           mode: auto
           overwrite_bindings: True
         {{ network_configuration.stdout }}
-
+        
+  - name: ensure image reachability
+    uri:
+      url: "{{ os_image_url }}"
+      method: HEAD
+      status_code: 200
+    register: result
+    retries: 15
+    delay: 5
+    until: result is not failed
+    
   - name: install
     command: "curtin -v --config /root/curtin.yaml --install-deps install"
 
